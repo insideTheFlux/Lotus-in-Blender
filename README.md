@@ -36,5 +36,5 @@ such as `0.005` makes it smoother.
 Blender 5.3 on Windows. Written against the 5.x Python API (the Principled BSDF socket names and the video media type).
 
 ## Licence
-Not chosen yet. Scripts that use Blender's Python API are generally treated as GPL, so this repo needs a licence
-decision before it is published.
+GPL-3.0-or-later, see `LICENSE`. Scripts that use Blender's Python API are generally treated as GPL, so this repo
+follows Blender's own licence.
