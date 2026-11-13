@@ -156,26 +156,47 @@ for ri, (n, L, W, curl, h, ph, mat) in enumerate(rings):
               random.uniform(0.35, 0.8), mat, tilt + random.uniform(-0.12, 0.12))
 
 
-# seed pod and stamens (raised so they sit inside the bowl of petals)
-bpy.ops.mesh.primitive_cone_add(vertices=48, radius1=0.17, radius2=0.22, depth=0.16, location=(0, 0, 0.30))
+# seed pod and stamens: sized to the opening the innermost petal ring leaves at this openness, so nothing pokes through
+def opening_radius(height, margin=0.045):
+    """How far from the axis the innermost ring (with its worst-case lean) is at `height`; 0 if it closes over it."""
+    tilt = 1.35 * (1 - o) + (0.05 + 3 * 0.18 * 0.6) * o + 0.12
+    curl = -0.35 * 0.45 * o + 0.25 * (1 - o)
+    x, z = 0.0, 0.09
+    n = 80
+    step = 1.0 * 0.92 / n
+    for i in range(n):
+        u = (i + 0.5) / n
+        ang = tilt + curl * u * u
+        x += step * math.cos(ang)
+        z += step * math.sin(ang)
+        if z >= height:
+            return max(0.0, 0.8 * x - margin)
+    return 0.0
+
+
+pod_r = min(0.22, max(0.05, opening_radius(0.38)))
+bpy.ops.mesh.primitive_cone_add(vertices=48, radius1=pod_r * 0.77, radius2=pod_r, depth=0.16, location=(0, 0, 0.30))
 pod = bpy.context.object
 pod.data.materials.append(material('pod', (0.55, 0.65, 0.18, 1), 0.5))
 for p in pod.data.polygons:
     p.use_smooth = True
 mat_st = material('stamen', (1.0, 0.78, 0.15, 1), 0.35, 0.0, (1.0, 0.7, 0.1, 1), 0.8)
-if o > 0.35:
+ring_max = min(0.36, opening_radius(0.36))
+if ring_max > 0.12:
+    import mathutils
+    lean = 0.35
     for i in range(110):
         a = random.uniform(0, math.tau)
-        r = random.uniform(0.22, 0.40)
-        bpy.ops.mesh.primitive_cylinder_add(vertices=6, radius=0.006, depth=0.3,
-                                            location=(math.cos(a) * r, math.sin(a) * r, 0.50))
+        rb = random.uniform(0.45, 1.0) * ring_max
+        axis = mathutils.Vector((-math.cos(a) * math.sin(lean), -math.sin(a) * math.sin(lean), math.cos(lean)))
+        base = mathutils.Vector((math.cos(a) * rb, math.sin(a) * rb, 0.36))
+        bpy.ops.mesh.primitive_cylinder_add(vertices=6, radius=0.006, depth=0.3, location=base + axis * 0.15)
         s = bpy.context.object
-        s.rotation_euler = (math.sin(a) * 0.35, -math.cos(a) * 0.35, 0)
+        s.rotation_mode = 'QUATERNION'
+        s.rotation_quaternion = mathutils.Vector((0, 0, 1)).rotation_difference(axis)
         s.data.materials.append(mat_st)
-        bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=6, radius=0.017,
-                                             location=(math.cos(a) * (r + 0.035), math.sin(a) * (r + 0.035), 0.66))
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=6, radius=0.017, location=base + axis * 0.30)
         bpy.context.object.data.materials.append(mat_st)
-
 # turn the whole flower towards the camera as the load passes 40 %: facing us at 100 %
 CAM_ELEV = math.atan2(4.0, 5.6)                      # the camera looks down at this angle
 turn = max(0.0, min(1.0, (o - 0.55) / 0.45))   # holds still until 55 %, then eases round
@@ -271,5 +292,6 @@ sc.render.filepath = out
 sc.render.image_settings.file_format = 'PNG'
 bpy.ops.render.render(write_still=True)
 print('DONE', out)
+
 
 
