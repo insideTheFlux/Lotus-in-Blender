@@ -12,7 +12,8 @@ param(
     [double]$Step = 0.025,
     [int]$Samples = 16,
     [double]$Scale = 0.5,
-    [int]$Fps = 24
+    [int]$Fps = 24,
+    [ValidateSet("cpu", "gpu")][string]$Device = "cpu"
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
@@ -22,7 +23,7 @@ $count = [int][math]::Round(1.0 / $Step)
 for ($i = 0; $i -le $count; $i++) {
     $open = [math]::Min(1.0, $i * $Step)
     $png = Join-Path $frames ('frame_{0:000}.png' -f $i)
-    & $Blender --background --python (Join-Path $here 'lotus.py') -- $png $open $Samples $Scale | Out-Null
+    & $Blender --background --python (Join-Path $here 'lotus.py') -- $png $open $Samples $Scale $Device | Out-Null
     if (-not (Test-Path $png)) { throw "Frame $i was not rendered." }
 }
 & $Blender --background --python (Join-Path $here 'frames-to-mp4.py') -- $frames $Out $Fps | Out-Null

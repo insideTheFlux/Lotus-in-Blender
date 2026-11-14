@@ -1,9 +1,12 @@
-﻿"""A procedural lotus for Blender (Cycles, CPU), lit in a black space, from closed bud (0) to fully open (1).
+"""A procedural lotus for Blender (Cycles, CPU or GPU), lit in a black space, from closed bud (0) to fully open (1).
 
-    blender --background --python lotus.py -- <out.png> [openness 0..1] [samples] [resolution scale]
+    blender --background --python lotus.py -- <out.png> [openness 0..1] [samples] [resolution scale] [cpu|gpu]
 
-The flower's petals, stamens, materials, lights and camera are all built in code (no assets). As `openness` rises
-the petals fall outwards; past 55 % the whole flower turns on its pivot to face the camera, fully facing it at 1.
+The petals, stamens, materials, lights and camera are all built in code (no assets). Eight stacked petal layers wrap
+round the axis so none cuts into another; the bud is a closed tulip shape that opens along one smooth curve. The
+receptacle with its seed bumps and the fringe of stamens are sized to the opening the inner petals leave. From about
+40 % the whole flower turns on its pivot to face the camera while the petals are still opening, and at 1 it looks
+straight at it. The camera backs off a little during the turn so the lowest petal stays in frame.
 """
 import bpy, bmesh, math, sys, random
 random.seed(7)
@@ -11,6 +14,7 @@ args = sys.argv[sys.argv.index('--') + 1:]
 out = args[0]
 o = float(args[1]) if len(args) > 1 else 0.8
 samples = int(args[2]) if len(args) > 2 else 96
+use_gpu = len(args) > 4 and args[4].lower() == 'gpu'
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
@@ -87,17 +91,54 @@ def petal_material(name, base, tip):
     return m
 
 
-def petal(length, width, angle, lift, curl, cup, mat, tilt):
+# How far open the petals are. It eases in and out over the first 95 % of the load (so the opening keeps going
+# while the flower lifts and turns) and is one smooth curve: no breakpoints.
+BUD_TILT = 0.9       # closed bud: petals start out leaning, then curve right over the top like a tulip
+BUD_CURL = 1.3
+LAYER_TILT = 0.075   # open flower: each layer in is a little steeper than the one below
+D = 0.04             # gap between stacked layers, measured along the petals' own normal
+a_open = min(1.0, o / 0.95)
+e = a_open * a_open * (3 - 2 * a_open)
+CURL_POW = 1.0 + e                                   # bends evenly along the length when closed, near the tip when open
+tilt0 = BUD_TILT * (1 - e) + 0.05 * e
+def spread(u):
+    """How much of its layer offset a petal has at fraction `u` of its length: a quarter of it at the root, where every layer
+    is attached at the centre, all of it from 40 % out."""
+    s = min(1.0, u / 0.4)
+    return 0.25 + 0.75 * s * s * (3 - 2 * s)
+
+
+def lowest_point():
+    """The lowest height the outermost layer reaches (nominal petal, no jitter)."""
+    curl = -0.95 * 0.45 * e + BUD_CURL * (1 - e)
+    x = z = 0.0
+    low = 0.0
+    n = 40
+    for i in range(n + 1):
+        u = i / n
+        ang = tilt0 + curl * u ** CURL_POW
+        low = min(low, z - 7 * D * spread(u) * math.cos(ang))
+        z += 1.55 / n * math.sin(ang)
+    return low
+
+
+ROOT_LIFT = -lowest_point() + 0.01                   # raises the flower so its lowest petal clears the floor
+
+
+def petal(length, width, angle, lift, curl, cup, mat, tilt, off=0.0):
     """A petal growing outwards along +X from the centre, then turned round Z by `angle`.
-    tilt: start angle above flat (radians); curl: how much that angle changes by the tip."""
+    tilt: start angle above flat (radians); curl: how much that angle changes by the tip.
+    off: slides the whole petal outwards along its own normal, which stacks the layers: the same distance apart
+    everywhere, whether the petals stand up in the bud or lie flat when open, so they cannot cut through each other."""
     nu, nv = 18, 10
     bm = bmesh.new()
     pts = []
     x = z = 0.0
     for i in range(nu + 1):
         u = i / nu
-        pts.append((x, z))
-        ang = tilt + curl * u * u
+        ang = tilt + curl * u ** CURL_POW
+        so = off * spread(u)
+        pts.append((x + so * math.sin(ang), z - so * math.cos(ang)))
         step = length / nu
         x += step * math.cos(ang)
         z += step * math.sin(ang)
@@ -105,11 +146,18 @@ def petal(length, width, angle, lift, curl, cup, mat, tilt):
     for i in range(nu + 1):
         u = i / nu
         w = width * (math.sin(math.pi * u ** 0.75) ** 0.85) + 0.004
+        w *= 0.2 + 0.8 * min(1.0, u / 0.3)      # a narrow claw at the root, so the bases do not form a disc
         row = []
         for j in range(nv + 1):
             v = j / nv * 2 - 1
             px, pz = pts[i]
-            row.append(bm.verts.new((px, v * w, pz + cup * v * v * w * (0.4 + u))))
+            px = max(px, 0.0)
+            # wrap the petal round the axis: a point keeps its distance from the axis and its height, so stacked
+            # petal layers are surfaces of revolution. Narrow at the root, widening outwards, and never wider than
+            # the gap to the next petal of the same layer.
+            amp = 0.15 + 0.47 * min(1.0, px / 0.6)
+            phi = amp * math.tanh(v * w / max(px, 0.3) / amp)
+            row.append(bm.verts.new((px * math.cos(phi), px * math.sin(phi), pz + cup * v * v * w * (0.4 + u))))
         verts.append(row)
     for i in range(nu):
         for j in range(nv):
@@ -137,37 +185,36 @@ mat_outer = petal_material('outer', (0.98, 0.86, 0.88, 1), (0.85, 0.12, 0.38, 1)
 mat_mid = petal_material('mid', (0.99, 0.90, 0.90, 1), (0.92, 0.35, 0.55, 1))
 mat_in = petal_material('in', (1.0, 0.95, 0.88, 1), (0.98, 0.62, 0.72, 1))
 
-# (count, length, width, curl, height, phase, material); outer rings fall outwards first as the flower opens
+# (count, length, width, curl, phase, material); every ring has an even count so its petals alternate between two
+# layers, eight layers in all, stacked from the outside in (0 = outermost).
+jit = 0.1 + 0.9 * e       # petals are nearly identical in the bud and more individual as they open
 rings = [
-    (8, 1.55, 0.50, 0.95, 0.00, 0.0, mat_outer),
-    (8, 1.40, 0.46, 0.75, 0.03, 0.5, mat_mid),
-    (7, 1.22, 0.42, 0.55, 0.06, 0.2, mat_in),
-    (6, 1.00, 0.36, 0.35, 0.09, 0.7, mat_in),
+    (8, 1.55, 0.50, 0.95, 0.0, mat_outer),
+    (8, 1.40, 0.46, 0.75, 0.5, mat_mid),
+    (8, 1.22, 0.42, 0.55, 0.2, mat_in),
+    (6, 1.00, 0.36, 0.35, 0.7, mat_in),
 ]
-for ri, (n, L, W, curl, h, ph, mat) in enumerate(rings):
-    # closed: petals stand up; open: they lean out. Inner rings stay more upright.
-    stay = ri * 0.18
+for ri, (n, L, W, curl, ph, mat) in enumerate(rings):
     for k in range(n):
+        layer = 2 * ri + (k % 2)
         a = (k + ph) / n * math.tau + random.uniform(-0.05, 0.05)
-        tilt = 1.35 * (1 - o) + (0.05 + stay * 0.6) * o
-        # every petal is a little different: length, width, how far it leans and curls, how much it cups
-        petal(L * random.uniform(0.92, 1.08), W * random.uniform(0.9, 1.1), a, h,
-              (-curl * 0.45 * o + 0.25 * (1 - o)) * random.uniform(0.6, 1.4),
-              random.uniform(0.35, 0.8), mat, tilt + random.uniform(-0.12, 0.12))
-
-
+        tilt = tilt0 + layer * LAYER_TILT * e + random.uniform(-0.012, 0.012) * jit
+        petal(L * (1 + random.uniform(-0.08, 0.08) * jit), W * random.uniform(0.9, 1.1), a, ROOT_LIFT,
+              (-curl * 0.45 * e + BUD_CURL * (1 - e)) * (1 + random.uniform(-0.1, 0.1) * jit),
+              random.uniform(0.03, 0.06), mat, tilt, (7 - layer) * D)
 
 # seed pod and stamens: sized to the opening the innermost petal ring leaves at this openness, so nothing pokes through
 def opening_radius(height, margin=0.045):
-    """How far from the axis the innermost ring (with its worst-case lean) is at `height`; 0 if it closes over it."""
-    tilt = 1.35 * (1 - o) + (0.05 + 3 * 0.18 * 0.6) * o + 0.12
-    curl = -0.35 * 0.45 * o + 0.25 * (1 - o)
-    x, z = 0.0, 0.09
+    """How far from the axis the innermost layer (with its worst-case lean) is at `height`; 0 if it closes over it."""
+    tilt = tilt0 + 7 * LAYER_TILT * e + 0.012
+    curl = -0.35 * 0.45 * e + BUD_CURL * (1 - e)
+    curl *= 1.1 if curl > 0 else 0.9
+    x, z = 0.0, ROOT_LIFT
     n = 80
     step = 1.0 * 0.92 / n
     for i in range(n):
         u = (i + 0.5) / n
-        ang = tilt + curl * u * u
+        ang = tilt + curl * u ** CURL_POW
         x += step * math.cos(ang)
         z += step * math.sin(ang)
         if z >= height:
@@ -175,36 +222,61 @@ def opening_radius(height, margin=0.045):
     return 0.0
 
 
-pod_r = min(0.22, max(0.05, opening_radius(0.38)))
-bpy.ops.mesh.primitive_cone_add(vertices=48, radius1=pod_r * 0.77, radius2=pod_r, depth=0.16, location=(0, 0, 0.30))
-pod = bpy.context.object
-pod.data.materials.append(material('pod', (0.55, 0.65, 0.18, 1), 0.5))
-for p in pod.data.polygons:
-    p.use_smooth = True
-mat_st = material('stamen', (1.0, 0.78, 0.15, 1), 0.35, 0.0, (1.0, 0.7, 0.1, 1), 0.8)
-# The stamens are there from the closed bud: a thin bundle that lengthens and spreads as the petals open, always
-# inside the opening the inner ring leaves (no switch-on point, so nothing pops into view).
+dz = ROOT_LIFT - 0.17                         # the centre rests just above the inner petals' roots
 import mathutils
-ring_max = max(0.012, min(0.36, opening_radius(0.36)))
-grow = min(1.0, o / 0.6)
+# The centre, after a real sacred lotus: a flat-topped yellow receptacle pitted with seed holes, ringed by a dense,
+# low collar of short stamens that curve outwards as the flower opens. Everything is sized to the opening the inner
+# petals leave at this openness, so nothing pokes through.
+r_open = opening_radius(0.34 + dz)
+pr = min(0.26, max(0.05, 0.68 * r_open))                # receptacle radius
+z_top = 0.31 + dz                                      # height of its flat top
+mat_pod = material('pod', (0.62, 0.70, 0.22, 1), 0.55)
+mat_top = material('pod_top', (0.86, 0.80, 0.22, 1), 0.5, 0.1)
+mat_pit = material('pit', (0.80, 0.52, 0.08, 1), 0.5)
+mat_fil = material('filament', (1.0, 0.55, 0.05, 1), 0.5, 0.15)
+mat_anth = material('anther', (1.0, 0.72, 0.14, 1), 0.45)
+bpy.ops.mesh.primitive_cone_add(vertices=48, radius1=pr * 0.6, radius2=pr, depth=0.10, location=(0, 0, z_top - 0.05))
+bpy.context.object.data.materials.append(mat_pod)
+for p in bpy.context.object.data.polygons:
+    p.use_smooth = True
+bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=pr * 0.985, depth=0.006, location=(0, 0, z_top + 0.001))
+bpy.context.object.data.materials.append(mat_top)
+for i in range(30):                                    # seed holes in a spiral, like sunflower seeds
+    rr = 0.8 * pr * math.sqrt((i + 0.5) / 30)
+    aa = i * 2.39996
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=10, ring_count=6, radius=0.09 * pr,
+                                         location=(rr * math.cos(aa), rr * math.sin(aa), z_top + 0.002))
+    bpy.context.object.scale = (1, 1, 0.5)
+    bpy.context.object.data.materials.append(mat_pit)
+grow = min(1.0, o / 0.9)
 grow = grow * grow * (3 - 2 * grow)
-length = 0.16 + 0.14 * grow
-for i in range(110):
+spread = 0.15 + 0.85 * e                               # upright and tight in the bud, curving out as it opens
+for i in range(560):
     a = random.uniform(0, math.tau)
-    rb = random.uniform(0.45, 1.0) * ring_max
-    lean = min(0.35, math.asin(min(1.0, 0.6 * rb / length)))    # never leans past the axis
-    axis = mathutils.Vector((-math.cos(a) * math.sin(lean), -math.sin(a) * math.sin(lean), math.cos(lean)))
-    base = mathutils.Vector((math.cos(a) * rb, math.sin(a) * rb, 0.36))
-    bpy.ops.mesh.primitive_cylinder_add(vertices=6, radius=0.006, depth=length, location=base + axis * (length / 2))
+    rb = pr * random.uniform(0.88, 1.18)
+    l = random.uniform(0.14, 0.27) * (0.7 + 0.3 * grow)
+    lean = (0.12 + 0.62 * spread) * random.uniform(0.7, 1.2)     # angle from the vertical, outwards
+    twist = random.uniform(-0.6, 0.6)                              # a little sideways curl
+    zb = z_top - 0.07
+    # never let the tip reach the petals
+    r_lim = opening_radius(zb + l * math.cos(min(lean, 1.4)))
+    if rb + l * math.sin(lean) > r_lim:
+        lean = math.asin(max(0.0, min(0.9, (r_lim - rb) / l))) if r_lim > rb else 0.0
+    az = a + twist
+    axis = mathutils.Vector((math.cos(az) * math.sin(lean), math.sin(az) * math.sin(lean), math.cos(lean)))
+    base = mathutils.Vector((math.cos(a) * rb, math.sin(a) * rb, zb))
+    bpy.ops.mesh.primitive_cylinder_add(vertices=5, radius=0.0042, depth=l, location=base + axis * (l / 2))
     s = bpy.context.object
     s.rotation_mode = 'QUATERNION'
     s.rotation_quaternion = mathutils.Vector((0, 0, 1)).rotation_difference(axis)
-    s.data.materials.append(mat_st)
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=6, radius=0.017, location=base + axis * length)
-    bpy.context.object.data.materials.append(mat_st)
-# turn the whole flower towards the camera as the load passes 40 %: facing us at 100 %
+    s.data.materials.append(mat_fil)
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=6, radius=0.0062, location=base + axis * l)
+    bpy.context.object.scale = (1, 1, 1.8)
+    bpy.context.object.rotation_mode = 'QUATERNION'
+    bpy.context.object.rotation_quaternion = mathutils.Vector((0, 0, 1)).rotation_difference(axis)
+    bpy.context.object.data.materials.append(mat_anth)# turn the whole flower towards the camera as the load passes 40 %: facing us at 100 %
 CAM_ELEV = math.atan2(4.0, 5.6)                      # the camera looks down at this angle
-turn = max(0.0, min(1.0, (o - 0.55) / 0.45))   # holds still until 55 %, then eases round
+turn = max(0.0, min(1.0, (o - 0.38) / 0.62))   # holds still until 38 %, then eases round while the petals are still opening
 turn = turn * turn * (3 - 2 * turn)                  # smoothstep
 theta = (math.pi / 2 - CAM_ELEV) * turn              # the flower's axis ends up pointing at the camera
 pivot = bpy.data.objects.new('pivot', None)
@@ -268,12 +340,13 @@ lamp('top', 'AREA', (0.0, 0.5, 6.0), 150, (1.0, 0.92, 0.88), 3.0)      # a littl
 cam = bpy.data.cameras.new('c')
 cam.lens = 48
 cam.dof.use_dof = True
-cam.dof.focus_distance = 5.8 + 1.7 * o
+PULL = 1.1 * math.sin(math.pi * max(0.0, min(1.0, (o - 0.50) / 0.32))) ** 2   # back off while the turned flower swings its lowest petal past the frame edge
+cam.dof.focus_distance = 5.8 + 1.7 * o + PULL
 cam.dof.aperture_fstop = 5.6
 co = bpy.data.objects.new('c', cam)
 sc.collection.objects.link(co)
 sc.camera = co
-DIST = 5.8 + 1.7 * o                                  # closer for the bud, back for the open flower
+DIST = 5.8 + 1.7 * o + PULL                                # closer for the bud, back for the open flower
 co.location = (centre[0], centre[1] - DIST * math.cos(CAM_ELEV), centre[2] + DIST * math.sin(CAM_ELEV))
 t = co.constraints.new('TRACK_TO')
 t.target = tgt
@@ -281,7 +354,15 @@ t.track_axis = 'TRACK_NEGATIVE_Z'
 t.up_axis = 'UP_Y'
 
 sc.render.engine = 'CYCLES'
-sc.cycles.device = 'CPU'
+if use_gpu:                      # CUDA on an NVIDIA card; falls back to the CPU if none is found
+    cp = bpy.context.preferences.addons['cycles'].preferences
+    cp.compute_device_type = 'CUDA'
+    cp.refresh_devices()
+    for d in cp.devices:
+        d.use = (d.type == 'CUDA')
+    sc.cycles.device = 'GPU' if any(d.type == 'CUDA' for d in cp.devices) else 'CPU'
+else:
+    sc.cycles.device = 'CPU'
 sc.cycles.samples = samples
 sc.cycles.use_denoising = True
 res_scale = float(args[3]) if len(args) > 3 else 1.0
@@ -297,7 +378,3 @@ sc.render.filepath = out
 sc.render.image_settings.file_format = 'PNG'
 bpy.ops.render.render(write_still=True)
 print('DONE', out)
-
-
-
-

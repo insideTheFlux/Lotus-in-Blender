@@ -1,17 +1,21 @@
 ﻿# blender-lotus
 
 A procedural lotus for [Blender](https://www.blender.org/), drawn entirely in code: no models, textures or other
-assets. It renders with Cycles on the CPU, in a black space with three lamps and a dark glossy floor.
+assets. It renders with Cycles on the CPU or an NVIDIA GPU, in a black space with three lamps and a dark glossy floor.
 
 One number drives it, `openness`, from 0 (a closed bud) to 1 (fully open):
 
-- the four petal rings fall outwards as it rises; the gold stamens and seed pod are there from the bud and spread with the petals, always inside the opening the inner ring leaves;
+- eight stacked petal layers wrap round the axis, so no petal cuts into another; the bud is a closed, rounded tulip shape
+  and opens along one smooth curve;
+- the centre is a flat receptacle with raised seed bumps, ringed by a dense fringe of orange stamens that stand upright
+  in the bud and curve outwards as it opens, always inside the opening the inner petals leave;
 - every petal is slightly different (length, width, lean, curl, cup), seeded so the same flower renders every time;
-- past 55 % the whole flower turns on its pivot to face the camera, and at 1 it looks straight at it.
+- from about 40 % the whole flower turns on its pivot to face the camera while the petals are still opening, and at 1 it
+  looks straight at it; the camera backs off a little during the turn so the lowest petal stays in frame.
 
 ```
-blender --background --python lotus.py -- <out.png> [openness 0..1] [samples] [resolution scale]
-blender --background --python lotus.py -- lotus.png 0.8 64 1
+blender --background --python lotus.py -- <out.png> [openness 0..1] [samples] [resolution scale] [cpu|gpu]
+blender --background --python lotus.py -- lotus.png 0.8 64 1 gpu
 ```
 
 | Argument | Meaning | Default |
@@ -20,16 +24,16 @@ blender --background --python lotus.py -- lotus.png 0.8 64 1
 | `openness` | 0 to 1 | 0.8 |
 | `samples` | Cycles samples (denoised) | 96 |
 | `resolution scale` | 1 is 1600x1000 | 1 |
+| `cpu` or `gpu` | `gpu` uses CUDA on an NVIDIA card, and falls back to the CPU if none is found | cpu |
 
-A full 1600x1000 frame at 80 samples takes about 6 to 8 minutes on a recent CPU; 800x500 at 16 samples takes under
-half a minute.
+On a GTX 1070, 800x500 at 16 samples takes about 17 s with `gpu` and about 30 s on a 6-thread CPU.
 
 ## A looping video
 ```powershell
-.\render-cycle.ps1 -Blender 'C:\Program Files\Blender Foundation\Blender 5.3\blender.exe' -Out lotus.mp4
+.\render-cycle.ps1 -Blender 'C:\Program Files\Blender Foundation\Blender 5.3\blender.exe' -Out lotus.mp4 -Device gpu
 ```
 Renders a frame every 2.5 % of openness (`-Step`), joins them with `frames-to-mp4.py` (Blender's own video
-sequencer, no other tools), and plays up and then back down. The turn happens over the last 45 %, so a finer `-Step`
+sequencer, no other tools), and plays up and then back down. The turn runs over the last 60 %, so a finer `-Step`
 such as `0.005` makes it smoother.
 
 ## Tested with
