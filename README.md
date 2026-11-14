@@ -1,11 +1,11 @@
-# blender-lotus
+﻿# blender-lotus
 
 A procedural lotus for [Blender](https://www.blender.org/), drawn entirely in code: no models, textures or other
 assets. It renders with Cycles on the CPU, in a black space with three lamps and a dark glossy floor.
 
 One number drives it, `openness`, from 0 (a closed bud) to 1 (fully open):
 
-- the four petal rings fall outwards as it rises, and the gold stamens and seed pod appear past about 35 %;
+- the four petal rings fall outwards as it rises; the gold stamens and seed pod are there from the bud and spread with the petals, always inside the opening the inner ring leaves;
 - every petal is slightly different (length, width, lean, curl, cup), seeded so the same flower renders every time;
 - past 55 % the whole flower turns on its pivot to face the camera, and at 1 it looks straight at it.
 
