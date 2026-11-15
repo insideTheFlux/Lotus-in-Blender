@@ -251,6 +251,45 @@ for i in range(30):                                    # seed holes in a spiral,
 grow = min(1.0, o / 0.9)
 grow = grow * grow * (3 - 2 * grow)
 spread = 0.15 + 0.85 * e                               # upright and tight in the bud, curving out as it opens
+# all the filaments are one mesh and all the anthers another, written straight from vertex and face lists (one object
+# per stamen, or a bmesh operator per stamen, made the scene take minutes to build)
+fil_v, fil_f, anth_v, anth_f = [], [], [], []
+
+
+def add_prism(centre, rot, length, radius, sides=5):
+    n0 = len(fil_v)
+    for z in (-length / 2, length / 2):
+        for k in range(sides):
+            t = k / sides * math.tau
+            fil_v.append(centre + rot @ mathutils.Vector((radius * math.cos(t), radius * math.sin(t), z)))
+    for k in range(sides):
+        k2 = (k + 1) % sides
+        fil_f.append((n0 + k, n0 + k2, n0 + sides + k2, n0 + sides + k))
+    fil_f.append(tuple(n0 + k for k in reversed(range(sides))))
+    fil_f.append(tuple(n0 + sides + k for k in range(sides)))
+
+
+def add_ellipsoid(centre, rot, rx, rz, segs=8, rings=6):
+    n0 = len(anth_v)
+    anth_v.append(centre + rot @ mathutils.Vector((0, 0, rz)))
+    for j in range(1, rings):
+        ph = math.pi * j / rings
+        for k in range(segs):
+            t = k / segs * math.tau
+            anth_v.append(centre + rot @ mathutils.Vector(
+                (rx * math.sin(ph) * math.cos(t), rx * math.sin(ph) * math.sin(t), rz * math.cos(ph))))
+    anth_v.append(centre + rot @ mathutils.Vector((0, 0, -rz)))
+    south = len(anth_v) - n0 - 1
+    for k in range(segs):
+        anth_f.append((n0, n0 + 1 + (k + 1) % segs, n0 + 1 + k))
+        anth_f.append((n0 + south, n0 + 1 + (rings - 2) * segs + k, n0 + 1 + (rings - 2) * segs + (k + 1) % segs))
+    for j in range(rings - 2):
+        for k in range(segs):
+            a0 = n0 + 1 + j * segs + k
+            a1 = n0 + 1 + j * segs + (k + 1) % segs
+            anth_f.append((a0, a1, a1 + segs, a0 + segs))
+
+
 for i in range(560):
     a = random.uniform(0, math.tau)
     rb = pr * random.uniform(0.88, 1.18)
@@ -265,16 +304,18 @@ for i in range(560):
     az = a + twist
     axis = mathutils.Vector((math.cos(az) * math.sin(lean), math.sin(az) * math.sin(lean), math.cos(lean)))
     base = mathutils.Vector((math.cos(a) * rb, math.sin(a) * rb, zb))
-    bpy.ops.mesh.primitive_cylinder_add(vertices=5, radius=0.0042, depth=l, location=base + axis * (l / 2))
-    s = bpy.context.object
-    s.rotation_mode = 'QUATERNION'
-    s.rotation_quaternion = mathutils.Vector((0, 0, 1)).rotation_difference(axis)
-    s.data.materials.append(mat_fil)
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=6, radius=0.0062, location=base + axis * l)
-    bpy.context.object.scale = (1, 1, 1.8)
-    bpy.context.object.rotation_mode = 'QUATERNION'
-    bpy.context.object.rotation_quaternion = mathutils.Vector((0, 0, 1)).rotation_difference(axis)
-    bpy.context.object.data.materials.append(mat_anth)# turn the whole flower towards the camera as the load passes 40 %: facing us at 100 %
+    rot = mathutils.Vector((0, 0, 1)).rotation_difference(axis).to_matrix()
+    add_prism(base + axis * (l / 2), rot, l, 0.0042)
+    add_ellipsoid(base + axis * l, rot, 0.0062, 0.0062 * 1.8)
+for verts, faces, name, mat in ((fil_v, fil_f, 'filaments', mat_fil), (anth_v, anth_f, 'anthers', mat_anth)):
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([tuple(v) for v in verts], [], faces)
+    me.update()
+    me.materials.append(mat)
+    ob = bpy.data.objects.new(name, me)
+    sc.collection.objects.link(ob)
+
+# turn the whole flower towards the camera as the load passes 40 %: facing us at 100 %
 CAM_ELEV = math.atan2(4.0, 5.6)                      # the camera looks down at this angle
 turn = max(0.0, min(1.0, (o - 0.38) / 0.62))   # holds still until 38 %, then eases round while the petals are still opening
 turn = turn * turn * (3 - 2 * turn)                  # smoothstep

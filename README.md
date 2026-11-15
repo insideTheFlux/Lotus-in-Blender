@@ -42,3 +42,11 @@ Blender 5.3 on Windows. Written against the 5.x Python API (the Principled BSDF 
 ## Licence
 GPL-3.0-or-later, see `LICENSE`. Scripts that use Blender's Python API are generally treated as GPL, so this repo
 follows Blender's own licence.
+
+## Frames for PetalStat
+`lotus-frames.py` renders one frame of a frame sequence (1920x1080 JPEG, `dim` or `bright`, with the floor hidden from
+the camera so the backdrop is pure black). PetalStat's Lotus theme plays 241 such frames per light level, openness
+`k/240`:
+```powershell
+blender --background --python lotus-frames.py -- k_100.jpg 0.4167 48 1 bright
+```
